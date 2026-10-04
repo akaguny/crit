@@ -283,13 +283,23 @@ jobs:
 
       - name: Run tests
         shell: bash
+        # Coverage is uploaded because //go:build windows files never appear in
+        # the Linux unit profile, so Codecov patch stays at 0% for those lines
+        # even when these shards exercise them.
         run: |
           SHARD=${{ matrix.shard-index }}
           PKGS=$(go list ./... | grep -v /node_modules/ | sort | awk "NR%3==$SHARD")
           echo "$(echo "$PKGS" | wc -l) packages in shard $SHARD"
-          go test $PKGS
+          go test -coverprofile="coverage-windows-${SHARD}.out" -covermode=atomic $PKGS
         env:
           MSYS_NO_PATHCONV: 1
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          files: coverage-windows-${{ matrix.shard-index }}.out
+          flags: unit-windows
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       # Some tests spawn `crit.exe` daemons that may outlive the test process
       # by a few seconds (background goroutines, deferred file flushes). If
