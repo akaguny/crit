@@ -1874,10 +1874,31 @@ func (s *Session) GetComments(filePath string) []Comment {
 	if f == nil {
 		return []Comment{}
 	}
-	result := make([]Comment, 0, len(f.Comments))
+	return visibleCommentsLocked(f.Comments, focusKeyFor(s.Focus), s.Focus)
+}
+
+// GetVisibleComments returns every file's comments that are visible in the
+// current focus, keyed by path. Files with no visible comments are left out.
+// The page uses it to show comments on files whose diffs have not loaded.
+func (s *Session) GetVisibleComments() map[string][]Comment {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	focusKey := focusKeyFor(s.Focus)
-	for _, c := range f.Comments {
-		if !visibleInFocusKey(c, focusKey, s.Focus) {
+	result := make(map[string][]Comment)
+	for _, f := range s.Files {
+		if cs := visibleCommentsLocked(f.Comments, focusKey, s.Focus); len(cs) > 0 {
+			result[f.Path] = cs
+		}
+	}
+	return result
+}
+
+// visibleCommentsLocked copies the comments visible under focusKey, with
+// their replies, so callers can read them after the lock is released.
+func visibleCommentsLocked(comments []Comment, focusKey string, focus Focus) []Comment {
+	result := make([]Comment, 0, len(comments))
+	for _, c := range comments {
+		if !visibleInFocusKey(c, focusKey, focus) {
 			continue
 		}
 		if len(c.Replies) > 0 {
@@ -1914,27 +1935,6 @@ func (s *Session) FindCommentByID(id string, filePath string) (Comment, string, 
 		}
 	}
 	return Comment{}, "", false
-}
-
-// GetAllComments returns all comments grouped by file path.
-func (s *Session) GetAllComments() map[string][]Comment {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	result := make(map[string][]Comment)
-	for _, f := range s.Files {
-		if len(f.Comments) > 0 {
-			comments := make([]Comment, len(f.Comments))
-			copy(comments, f.Comments)
-			for i, c := range comments {
-				if len(c.Replies) > 0 {
-					comments[i].Replies = make([]Reply, len(c.Replies))
-					copy(comments[i].Replies, c.Replies)
-				}
-			}
-			result[f.Path] = comments
-		}
-	}
-	return result
 }
 
 // TotalCommentCount returns the total number of comments across all files and review comments.

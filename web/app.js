@@ -593,8 +593,13 @@
       }
     }
 
-    // Load eager files fully
-    const eagerFiles = await Promise.all(eager.map(function(fi) { return loadSingleFile(fi, scope); }));
+    // Load eager files fully. Lazy files get their comments from one bulk
+    // request so the header count, tree badges and comments panel include
+    // them before their diffs load.
+    const [eagerFiles, commentsByPath] = await Promise.all([
+      Promise.all(eager.map(function(fi) { return loadSingleFile(fi, scope); })),
+      fetchAllFileComments(),
+    ]);
 
     // Create lightweight placeholders for lazy files
     const lazyFiles = lazy.map(function(fi) {
@@ -605,7 +610,7 @@
         fileType: fi.file_type,
         content: '',
         previousContent: '',
-        comments: [],
+        comments: (commentsByPath && commentsByPath[fi.path]) || [],
         diffHunks: [],
         lineBlocks: null,
         previousLineBlocks: null,
@@ -621,6 +626,29 @@
     });
 
     return eagerFiles.concat(lazyFiles);
+  }
+
+  // Every file's comments in one request, keyed by path (files with none
+  // are absent). Returns null on failure so callers keep what they have.
+  async function fetchAllFileComments() {
+    try {
+      const res = await fetch('/api/files/comments');
+      if (!res.ok) return null;
+      const byPath = await res.json();
+      return byPath && typeof byPath === 'object' ? byPath : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Set each file's comments from a fetchAllFileComments result. A null
+  // result (failed fetch) leaves the current comments alone.
+  function applyAllFileComments(byPath) {
+    if (!byPath) return;
+    for (const f of files) {
+      const comments = byPath[f.path];
+      f.comments = Array.isArray(comments) ? comments : [];
+    }
   }
 
   // Load a single file's content, comments, and diff from the API.
@@ -1943,10 +1971,16 @@
   const pierreLoader = window.crit.pierreRuntime.createLoader({
     getFile: getFileByPath,
     load: function(file, signal) {
+      // A comments refresh can land while the diff is loading; keep its
+      // newer list instead of the one fetched with the diff.
+      const commentsAtStart = file.comments;
       return loadSingleFile({
         path: file.path, old_path: file.oldPath, status: file.status, file_type: file.fileType,
         additions: file.additions, deletions: file.deletions, generated: file.generated,
-      }, currentFileDataScope(), signal);
+      }, currentFileDataScope(), signal).then(function(loaded) {
+        if (loaded && file.comments !== commentsAtStart) loaded.comments = file.comments;
+        return loaded;
+      });
     },
     changed: updateTreeCommentBadges,
   });
@@ -6842,18 +6876,13 @@
       'comments-changed': async function() {
       try {
         // Only re-fetch comments data, not file content or diffs (those only
-        // change on file-changed events). This reduces O(3N) to O(N) requests.
+        // change on file-changed events), in one request for all files.
         const previousCommentSignatures = new Map();
         for (let i = 0; i < files.length; i++) {
           previousCommentSignatures.set(files[i].path, JSON.stringify(files[i].comments || []));
         }
         const previousReviewSignature = JSON.stringify(reviewComments || []);
-        await Promise.all(files.map(async function(f) {
-          return fetch('/api/file/comments?path=' + enc(f.path))
-            .then(function(r) { return r.ok ? r.json() : []; })
-            .then(function(comments) { f.comments = Array.isArray(comments) ? comments : []; })
-            .catch(function() { /* ignore fetch errors */ });
-        }));
+        applyAllFileComments(await fetchAllFileComments());
         // Also refresh review-level comments
         try {
           const rcRes = await fetch('/api/comments');
@@ -7007,14 +7036,7 @@
   // refresh + render-panel path — preserves scroll position, expanded
   // threads, and unsubmitted drafts (no location.reload).
   async function refreshAllComments() {
-    await Promise.all(files.map(async function(f) {
-      try {
-        const r = await fetch('/api/file/comments?path=' + enc(f.path));
-        if (r.ok) {
-          f.comments = await r.json();
-        }
-      } catch { /* per-file refresh is best-effort */ }
-    }));
+    applyAllFileComments(await fetchAllFileComments());
     renderCommentsPanel();
     updateCommentCount();
     updateTreeCommentBadges();
