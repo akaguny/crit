@@ -113,7 +113,10 @@
   // holding its label. The source is the whole file, so its lines are file
   // lines.
   function anchorFor(el, ctx) {
-    var lines = String(ctx.source || '').split('\n');
+    // Keep original line numbers, but ignore disabled definitions and labels.
+    var lines = String(ctx.source || '').split('\n').map(function (line) {
+      return /^\s*%%/.test(line) ? '' : line;
+    });
     var c = candidates(el, ctx.container);
     for (var i = 0; i < c.ids.length; i++) {
       var id = '(^|[^\\w-])' + escapeRegExp(c.ids[i]);

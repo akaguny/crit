@@ -310,8 +310,17 @@
 
   // Does anything under root need renderAll?
   function needsRender(root) {
-    var targets = (root || document).querySelectorAll('.crit-render');
+    var r = root || document;
+    var targets = r.querySelectorAll('.crit-render');
     for (var i = 0; i < targets.length; i++) if (isStale(targets[i])) return true;
+    // Comments start as bare fences; renderAll wraps them before rendering.
+    var codes = r.querySelectorAll('pre > code[class*="language-"]');
+    for (var j = 0; j < codes.length; j++) {
+      var pre = codes[j].parentElement;
+      if (pre.closest('.crit-render') || pre.closest('.comment-form')) continue;
+      var m = /(?:^|\s)language-([^\s]+)/.exec(codes[j].className);
+      if (m && forFence(m[1])) return true;
+    }
     return false;
   }
 

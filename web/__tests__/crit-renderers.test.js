@@ -186,6 +186,19 @@ test('mermaid anchorFor returns null when nothing matches', () => {
   assert.equal(mermaid.file.anchorFor(node, { source: flow, container: null }), null);
 });
 
+test('mermaid anchorFor ignores commented definitions, id references and labels without shifting lines', () => {
+  const svg = el('svg', {}, '');
+  const node = el('g', { id: 'flowchart-B-0' }, 'Real', svg);
+  const label = el('text', {}, 'Real', svg);
+  for (const live of ['  B[Real]', '  A --> B']) {
+    const source = 'flowchart TD\n  %% B[Real]\n\t%% A --> B\n' + live + '\n';
+    assert.deepEqual(mermaid.file.anchorFor(node, { source, container: null }), { startLine: 4, endLine: 4 });
+  }
+  const source = 'flowchart TD\n  %% Real\n  B[Real]\n';
+  assert.deepEqual(mermaid.file.anchorFor(label, { source, container: null }), { startLine: 3, endLine: 3 });
+  assert.equal(mermaid.file.anchorFor(node, { source: 'flowchart TD\n  %% B[Real]\n', container: null }), null);
+});
+
 // --- line blocks -------------------------------------------------------
 
 function loadLineBlocks(renderers) {
@@ -285,9 +298,27 @@ function fakeRenderTarget(attrs) {
   };
 }
 
-function fakeRoot(targets) {
-  return { querySelectorAll() { return targets; } };
+function fakeRoot(targets, codes = []) {
+  return { querySelectorAll(selector) { return selector === '.crit-render' ? targets : codes; } };
 }
+
+test('needsRender detects claimed bare comment fences on first mount and skips source and compose forms', () => {
+  const r = freshRegistry();
+  registerMermaid(r);
+  r.register({ kind: 'fence', name: 'custom', langs: ['custom'], render() {} });
+  const code = (lang, ancestor) => ({
+    className: 'language-' + lang,
+    parentElement: { closest(selector) { return selector === ancestor ? {} : null; } },
+  });
+  withDocument('dark', null, () => {
+    assert.equal(r.needsRender(fakeRoot([], [code('mermaid')])), true);
+    assert.equal(r.needsRender(fakeRoot([], [code('custom')])), true);
+    assert.equal(r.needsRender(fakeRoot([], [code('javascript')])), false);
+    const rendered = fakeRenderTarget({ 'data-crit-state': 'rendered', 'data-crit-theme': 'dark' });
+    assert.equal(r.needsRender(fakeRoot([rendered], [code('mermaid', '.crit-render')])), false);
+    assert.equal(r.needsRender(fakeRoot([], [code('mermaid', '.comment-form')])), false);
+  });
+});
 
 function withDocument(theme, palette, fn) {
   const had = Object.prototype.hasOwnProperty.call(global, 'document');
